@@ -1,0 +1,269 @@
+name: CI/CD Pipeline - React + Node.js + Firebase
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: your-registry.com
+  IMAGE_NAME: react-nodejs-app
+
+jobs:
+  # Linting and Testing
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      # Frontend Linting and Testing
+      - name: Frontend - Install dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Frontend - Lint
+        working-directory: ./frontend
+        run: npm run lint
+
+      - name: Frontend - Test
+        working-directory: ./frontend
+        run: npm test -- --watchAll=false --coverage
+
+      # Backend Linting and Testing
+      - name: Backend - Install dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Backend - Lint
+        working-directory: ./backend
+        run: npm run lint
+
+      - name: Backend - Test
+        working-directory: ./backend
+        run: npm test
+
+      - name: Notify Slack - Build Status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: |
+            🚀 **Build Status**: ${{ job.status }}
+            📦 **Job**: Lint and Test
+            🔗 **Commit**: ${{ github.sha }}
+            📋 **PR**: ${{ github.event.pull_request.html_url || 'Direct push' }}
+
+  # Build and Push Docker Images
+  build-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # Build Frontend
+      - name: Build Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Build Backend
+      - name: Build Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Notify Slack - Build Success
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: |
+            ✅ **Build Success**
+            🐳 Images built and pushed
+            🔗 **Commit**: ${{ github.sha }}
+            📦 **Images**: 
+            - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}
+            - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.sha }}
+
+  # Deploy to Staging
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubectl for staging
+        run: |
+          echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+
+      - name: Deploy to Staging
+        run: |
+          # Update image tags in deployment files
+          sed -i "s|your-registry.com/react-nodejs-app-frontend:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}|g" k8s/frontend-deployment.yaml
+          sed -i "s|your-registry.com/react-nodejs-app-backend:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.sha }}|g" k8s/backend-deployment.yaml
+          
+          # Deploy
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/secret.yaml
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/services.yaml
+          
+          # Wait for deployment
+          kubectl rollout status deployment/nodejs-backend -n react-nodejs-app --timeout=300s
+          kubectl rollout status deployment/react-frontend -n react-nodejs-app --timeout=300s
+
+      - name: Health Check Staging
+        run: |
+          # Wait for services to be ready
+          sleep 30
+          
+          # Test backend health
+          BACKEND_URL=$(kubectl get service nodejs-api-service -n react-nodejs-app -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          curl -f http://$BACKEND_URL:8000/health || exit 1
+
+      - name: Notify Slack - Staging Deploy
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: |
+            🚀 **Staging Deployment Success**
+            🌍 **Environment**: Staging
+            🔗 **Commit**: ${{ github.sha }}
+            ✅ **Health Check**: Passed
+
+  # Deploy to Production (Manual approval)
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubectl for production
+        run: |
+          echo "${{ secrets.PRODUCTION_KUBECONFIG }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+
+      - name: Blue-Green Deployment
+        run: |
+          # Create new deployment with new image
+          sed -i "s|your-registry.com/react-nodejs-app-frontend:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:${{ github.sha }}|g" k8s/frontend-deployment.yaml
+          sed -i "s|your-registry.com/react-nodejs-app-backend:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:${{ github.sha }}|g" k8s/backend-deployment.yaml
+          
+          # Deploy new version
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/secret.yaml
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/services.yaml
+          
+          # Wait for new deployment to be ready
+          kubectl rollout status deployment/nodejs-backend -n react-nodejs-app --timeout=300s
+          kubectl rollout status deployment/react-frontend -n react-nodejs-app --timeout=300s
+
+      - name: Health Check Production
+        run: |
+          # Wait for services to be ready
+          sleep 30
+          
+          # Test backend health
+          BACKEND_URL=$(kubectl get service nodejs-api-service -n react-nodejs-app -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          curl -f http://$BACKEND_URL:8000/health || exit 1
+
+      - name: Notify Slack - Production Deploy
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: |
+            🎉 **Production Deployment Success**
+            🌍 **Environment**: Production
+            🔗 **Commit**: ${{ github.sha }}
+            ✅ **Health Check**: Passed
+            🚀 **Blue-Green Deployment**: Completed
+
+  # Rollback on failure
+  rollback:
+    needs: [deploy-staging, deploy-production]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Rollback deployment
+        run: |
+          # Rollback to previous version
+          kubectl rollout undo deployment/nodejs-backend -n react-nodejs-app
+          kubectl rollout undo deployment/react-frontend -n react-nodejs-app
+          
+          # Wait for rollback
+          kubectl rollout status deployment/nodejs-backend -n react-nodejs-app --timeout=300s
+          kubectl rollout status deployment/react-frontend -n react-nodejs-app --timeout=300s
+
+      - name: Notify Slack - Rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          channel: '#deployments'
+          text: |
+            🔄 **Rollback Executed**
+            ❌ **Deployment Failed**
+            🔗 **Commit**: ${{ github.sha }}
+            ⚠️ **Previous version restored** 

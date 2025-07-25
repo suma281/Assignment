@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodejs-backend
+  namespace: react-nodejs-app
+  labels:
+    app: nodejs-backend
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nodejs-backend
+  template:
+    metadata:
+      labels:
+        app: nodejs-backend
+        version: v1
+    spec:
+      containers:
+      - name: nodejs-backend
+        image: your-registry.com/react-nodejs-app-backend:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: FRONTEND_URL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: FRONTEND_URL
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: PORT
+        - name: FIREBASE_PROJECT_ID
+          valueFrom:
+            secretKeyRef:
+              name: firebase-secret
+              key: firebase-project-id
+        - name: REDIS_URL
+          value: "redis://redis-service:6379"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3 

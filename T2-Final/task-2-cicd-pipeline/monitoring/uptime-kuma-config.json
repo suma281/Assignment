@@ -1,0 +1,94 @@
+{
+  "monitors": [
+    {
+      "name": "Frontend - Production",
+      "type": "http",
+      "url": "http://your-frontend-domain.com",
+      "interval": 30,
+      "retryInterval": 60,
+      "maxretries": 3,
+      "timeout": 10,
+      "expectedStatusCodes": [200],
+      "notifications": ["slack"]
+    },
+    {
+      "name": "Backend API - Production",
+      "type": "http",
+      "url": "http://your-backend-domain.com/health",
+      "interval": 30,
+      "retryInterval": 60,
+      "maxretries": 3,
+      "timeout": 10,
+      "expectedStatusCodes": [200],
+      "notifications": ["slack"]
+    },
+    {
+      "name": "Frontend - Staging",
+      "type": "http",
+      "url": "http://staging.your-frontend-domain.com",
+      "interval": 60,
+      "retryInterval": 120,
+      "maxretries": 2,
+      "timeout": 15,
+      "expectedStatusCodes": [200],
+      "notifications": ["slack"]
+    },
+    {
+      "name": "Backend API - Staging",
+      "type": "http",
+      "url": "http://staging.your-backend-domain.com/health",
+      "interval": 60,
+      "retryInterval": 120,
+      "maxretries": 2,
+      "timeout": 15,
+      "expectedStatusCodes": [200],
+      "notifications": ["slack"]
+    },
+    {
+      "name": "Database Connection",
+      "type": "tcp",
+      "hostname": "your-database-host",
+      "port": 5432,
+      "interval": 60,
+      "retryInterval": 120,
+      "maxretries": 3,
+      "timeout": 10,
+      "notifications": ["slack"]
+    },
+    {
+      "name": "Redis Cache",
+      "type": "tcp",
+      "hostname": "redis",
+      "port": 6379,
+      "interval": 60,
+      "retryInterval": 120,
+      "maxretries": 3,
+      "timeout": 10,
+      "notifications": ["slack"]
+    }
+  ],
+  "notifications": [
+    {
+      "name": "slack",
+      "type": "slack",
+      "webhook": "YOUR_SLACK_WEBHOOK_URL",
+      "channel": "#deployments",
+      "username": "Uptime Kuma",
+      "icon_emoji": ":warning:",
+      "messageTemplate": {
+        "down": "🚨 **Service Down**: {{name}} is down!\n🔗 URL: {{url}}\n⏰ Time: {{datetime}}\n📊 Response Time: {{responseTime}}ms",
+        "up": "✅ **Service Up**: {{name}} is back online!\n🔗 URL: {{url}}\n⏰ Time: {{datetime}}\n📊 Response Time: {{responseTime}}ms"
+      }
+    }
+  ],
+  "settings": {
+    "language": "en",
+    "theme": "dark",
+    "timezone": "UTC",
+    "retention": 90,
+    "maintenance": {
+      "enabled": true,
+      "maintenanceTime": "02:00-04:00"
+    }
+  }
+} 

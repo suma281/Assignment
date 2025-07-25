@@ -1,0 +1,35 @@
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodejs-api-service
+  namespace: react-nodejs-app
+  labels:
+    app: nodejs-backend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: nodejs-backend
+---
+# Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: react-app-service
+  namespace: react-nodejs-app
+  labels:
+    app: react-frontend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: react-frontend 

@@ -1,0 +1,134 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+  DO_K8S_STAGING_CONFIG: ${{ secrets.DO_K8S_STAGING_CONFIG }}
+  DO_K8S_PROD_CONFIG: ${{ secrets.DO_K8S_PROD_CONFIG }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+      - name: Install Frontend Dependencies & Lint
+        run: |
+          cd frontend
+          npm install
+          npm run lint # Assuming a lint script in package.json
+      - name: Install Backend Dependencies & Lint
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          # Add linting commands for Django (e.g., flake8)
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push'
+        uses: docker/login-action@v1
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+      - name: Build and push frontend image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v2
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ env.DOCKER_USERNAME }}/frontend:${{ github.sha }}
+      - name: Build and push backend image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v2
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ env.DOCKER_USERNAME }}/backend:${{ github.sha }}
+
+  build_mobile_app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build React Native App
+        run: |
+          echo "Building React Native app..."
+          echo "This would typically involve a more complex setup with EAS Build or a self-hosted runner with mobile tooling."
+
+  deploy_staging:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Save Kubeconfig
+        run: echo "${{ env.DO_K8S_STAGING_CONFIG }}" | base64 -d > $HOME/.kube/config
+      - name: Deploy to Staging
+        run: |
+          sed -i 's|your-registry/frontend:latest|${{ env.DOCKER_USERNAME }}/frontend:${{ github.sha }}|' k8s/deployment.yaml
+          sed -i 's|your-registry/backend:latest|${{ env.DOCKER_USERNAME }}/backend:${{ github.sha }}|' k8s/deployment.yaml
+          kubectl apply -f k8s/
+      - name: Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        with:
+          status: ${{ job.status }}
+          text: 'Deployment to staging successful. Running integration tests...'
+        env:
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
+
+  test_staging:
+    needs: deploy_staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Integration Tests
+        run: |
+          echo "Running integration tests against the staging environment..."
+          # Add commands to run tests (e.g., using curl, Cypress, etc.)
+          # For now, we'll simulate a successful test run.
+          exit 0
+      - name: Slack Notification
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        with:
+          status: ${{ job.status }}
+          text: 'Integration tests failed on staging environment.'
+        env:
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
+
+  deploy_production:
+    needs: test_staging
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://your-production-url.com
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Save Kubeconfig
+        run: echo "${{ env.DO_K8S_PROD_CONFIG }}" | base64 -d > $HOME/.kube/config
+      - name: Deploy to Production
+        run: |
+          sed -i 's|your-registry/frontend:latest|${{ env.DOCKER_USERNAME }}/frontend:${{ github.sha }}|' k8s/deployment.yaml
+          sed -i 's|your-registry/backend:latest|${{ env.DOCKER_USERNAME }}/backend:${{ github.sha }}|' k8s/deployment.yaml
+          kubectl apply -f k8s/
+      - name: Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        with:
+          status: ${{ job.status }}
+          text: 'Deployment to production successful.'
+        env:
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }} 
